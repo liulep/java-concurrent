@@ -985,3 +985,464 @@ Machina[0]: complete
 执行速度确实就是这么快，在没有调用join()的情况下，程序在任务完成前就退出了,对join()的调用就会一直阻塞main()线程的执行，直到操作完成。
 
 这种可以“立即返回”的异步能力依赖于CompletableFuture库的某些背后操作，通常来说，该库需要将你请求的操作链保存为一组**回调(callback)**,当第一个后台操作完成后，第二个后台操作必须接受相应的Machina并开始工作，然后当该操作完成后，下一个操作继续，以此类推。但是由于并非是程序调用栈控制的普通函数调用序列，其调用顺序会丢失，因此改用回调来存储，即一个记录了函数地址的表格。
+
+#### 其他操作
+
+查看CompletableFuture的javadoc中，可以看到它有很多方法，但其中大部分都是各种不同操作的变种，举例来说，其中有thenApply()和它的变种thenApplyAsync(),以及thenApplyAsync()的另外一种形式，它接受参数Exector来运行任务。
+
+以下实例演示了所有“基本”操作。
+
+```java
+public class CompletableUtils {
+    //获取并展示CF中存储的值
+    public static void showr(CompletableFuture<?> cf){
+        try {
+            System.out.println(cf.get());
+        }catch (InterruptedException | ExecutionException e){
+            throw new RuntimeException(e);
+        }
+    }
+    
+    //针对无值的CF操作
+    public static void voidr(CompletableFuture<Void> cf){
+        try {
+            cf.get();
+        }catch (InterruptedException | ExecutionException e){
+            throw new RuntimeException(e);
+        }
+    }
+}
+```
+
+showr()调用了CompletableFuture<Integer>的get(),并显示了结果，同时对两个可能的异常进行了捕获。
+
+voidr()是showr()针对CompletableFuture<Void>的实现版本，具体来说，即针对只在任务完成或失败时存在以用于展示的CompletableFuture.
+
+简单起见，下面例子的CompletableFuture仅仅包装了Integer类型，cfi()是一个简化的方法，其在一个完整的CompletableFuture<Integer>内部包装了一个int类型。
+
+```java
+public class CompletableOperations {
+    static CompletableFuture<Integer> cfi(int i){
+        return CompletableFuture.completedFuture(Integer.valueOf(i));
+    }
+
+    public static void main(String[] args) {
+        showr(cfi(1)); //基本测试
+        voidr(cfi(2).runAsync(() -> System.out.println("runAsync")));
+        //cfi(2)是一个条用runAsync的例子，Runnable不会返回任何值，因此结果是一个CompletableFuture<Void>,所以用到了voidr()
+        voidr(cfi(3).thenRunAsync(() -> System.out.println("thenRunAsync")));
+        //cfi(3)中的thenRunAsync()和runAsync()完全一样，区别只是在runAsync是一个静态的方法。
+        voidr(CompletableFuture.runAsync(() -> System.out.println("runAsync is static")));
+        //这与cfi(2)是一样的
+        showr(CompletableFuture.supplyAsync(() -> 99));
+        //静态方法，不过与runAsync不同，它的返回值为Supplier，并且会生成CompletableFuture<Integer>而不是CompletableFuture<Void>
+
+        //then系列方法针对已有的CompletableFuture<Integer>进行操作，不同于thenRunAsync(),用于cif(4),cfi(5),cfi(6)系列的then方法接受未包装的Integer作为参数
+        voidr(cfi(4).thenAcceptAsync(i -> System.out.println("thenAcceptAsync: "+i)));
+        //thenAcceptAsync接受Consumer作为参数，所以不会返回结果
+        showr(cfi(5).thenApplyAsync(i -> i + 42));
+        //thenApplyAsync()接受Function作为参数，因此会返回结果(可以和参数类型不同的类型)
+        showr(cfi(6).thenComposeAsync(i -> cfi(i + 99)));
+        //thenComposeAsync()接受Function作为参数，返回在CompletableFuture中被包装后的结果。
+
+        CompletableFuture<Integer> cf7 = cfi(7);
+        cf7.obtrudeValue(111);
+        //强制输入一个值作为结果
+        showr(cf7);
+        showr(cfi(8).toCompletableFuture());
+        //cfi(8)中toCompletableFuture()方法从当前的CompletionStage生成CompletableFuture
+        cf7= new CompletableFuture<>();
+        cf7.complete(9);
+        //complete()方法演示了如何通过传入结果来让一个Future完成执行
+        showr(cf7);
+        CompletableFuture<Object> c = new CompletableFuture<>();
+        c.cancel(true);
+        System.out.println("cancelled: "+c.isCancelled());
+        //cancel()取消了CompletableFuture,它同样会变成“已完成”(done),并且是特殊情况下的完成。
+        System.out.println("completed exceptionally: "+c.isCompletedExceptionally());
+        //是否存在异常
+        System.out.println("done: "+c.isDone());
+        //是否已经完成
+        System.out.println(c);
+        c = new CompletableFuture<>();
+        System.out.println(c.getNow(777));
+        //getNow()方法要么返回CompletableFuture的完整值，要么返回getNow()的替代参数(如果该future尚未完成)。
+        c = new CompletableFuture<>();
+        c.thenApplyAsync(i -> (int)i + 42)
+                .thenApplyAsync(i -> i * 12);
+        System.out.println("dependents: "+c.getNumberOfDependents());
+        c.thenApplyAsync(i -> (int)i / 2);
+        System.out.println("dependents: "+c.getNumberOfDependents());
+    }
+}
+```
+
+> dependents的概念
+>
+> 如果我们两次对CompletableFuture的thenApplyAsync调用连在一起，dependents的数量就为一个，如果我们直接将另外一个thenApplyAsync()添加到C中，那么就有了两个dependents: 两个连续的调用和一个额外的调用，这就说明了单独的CompletionStage可以在其完成后，基于它的结果fork出新任务。
+
+#### 合并多个CompletableFuture
+
+CompletableFuture中的第二类方法是接收两个CompletableFuture作为参数，并以多种方式将其合并，一般来说一个CompletableFuture会先于另一个执行完成，两者就看起来在彼此竞争，这些方法可以使你用不同的方式处理结果。
+
+为了测试上述方法，我们会创建一个任务，该任务的参数之一是完成该任务所需的时长，由此我们可以控制首先完成哪一个CompletableFuture;
+
+```java
+public class Workable {
+    String id;
+    final double duration;
+    
+    public Workable(String id, double duration){
+        this.id = id;
+        this.duration = duration;
+    }
+
+    @Override
+    public String toString() {
+        return "Workable["+id+"]";
+    }
+    public static Workable work(Workable tt){
+        new TimeSleep(tt.duration);
+        tt.id = tt.id + "W";
+        System.out.println(tt);
+        return tt;
+    }
+    
+    public static CompletableFuture<Workable> make(String id, double duration){
+        return CompletableFuture.completedFuture(new Workable(id, duration))
+                .thenApplyAsync(Workable::work);
+    }
+}
+```
+
+在mark()方法中，work()方法用于CompletableFuture,work()花了duration中的事件完成执行，然后将字母W附加到id后面，以此标识“work”已完成。
+
+现在我们可以创建多个互相竞争的CompletableFuture,并通过CompletableFuture库中的多种方法将它们互相关联起来；
+
+```java
+public class DualCompletableOperations {
+    static CompletableFuture<Workable> cfa , cfb;
+    static void init(){
+        cfa = Workable.make("A", 0.15);
+        cfb = Workable.make("B", 0.10); //总是最先执行
+    }
+
+    static void join(){
+        cfa.join();
+        cfb.join();
+        System.out.println("...............................");
+    }
+
+    public static void main(String[] args) {
+        init();
+        voidr(cfa.runAfterEitherAsync(cfb, () -> System.out.println("runAfterEither")));
+        //在任一之后运行
+        join();
+
+        init();
+        voidr(cfa.runAfterBothAsync(cfb, () -> System.out.println("runAfterBoth")));
+        //在两者之后运行
+        join();
+
+        init();
+        showr(cfa.applyToEitherAsync(cfb, w -> {
+            System.out.println("applyToEither: "+w);
+            return w;
+        }));
+        //适用于任一
+        join();
+
+        init();
+        voidr(cfa.acceptEitherAsync(cfb, w -> {
+            System.out.println("acceptEither: "+w);
+        }));
+        //接受任一
+        join();
+
+        init();
+        voidr(cfa.thenAcceptBothAsync(cfb, (w1, w2) -> {
+            System.out.println("thenAcceptBoth: " + w1 + ", " + w2);
+        }));
+        //同时接受两者
+        join();
+
+        init();
+        showr(cfa.thenCombineAsync(cfa, (w1, w2) -> {
+            System.out.println("thenCombine: "+ w1 +", "+w2);
+            return w1;
+        }));
+        //合并
+        join();
+
+        init();
+        CompletableFuture<Workable>
+                cfc = Workable.make("C", 0.08),
+                cfd = Workable.make("D", 0.09);
+        CompletableFuture.anyOf(cfa, cfb, cfc, cfd)
+                .thenRunAsync(() -> System.out.println("anyOf"));
+        join();
+
+        init();
+        cfc = Workable.make("C", 0.08);
+        cfd = Workable.make("D", 0.09);
+        CompletableFuture.allOf(cfa, cfb, cfc, cfd)
+                .thenRunAsync(() -> System.out.println("allOf"));
+        join();
+    }
+}
+
+```
+
+结果：
+
+```java
+Workable[BW]
+runAfterEither
+Workable[AW]
+...............................
+Workable[BW]
+Workable[AW]
+runAfterBoth
+...............................
+Workable[BW]
+applyToEither: Workable[BW]
+Workable[BW]
+Workable[AW]
+...............................
+Workable[BW]
+acceptEither: Workable[BW]
+Workable[AW]
+...............................
+Workable[BW]
+Workable[AW]
+thenAcceptBoth: Workable[AW], Workable[BW]
+...............................
+Workable[BW]
+Workable[AW]
+thenCombine: Workable[AW], Workable[AW]
+Workable[AW]
+...............................
+Workable[DW]
+Workable[CW]
+anyOf
+Workable[BW]
+Workable[AW]
+...............................
+Workable[DW]
+Workable[CW]
+Workable[BW]
+Workable[AW]
+...............................
+allOf
+```
+
+通过showr()和voidr()的用法，可以看到“run”和“accpet”是终结操作，而“apply”和“combine”则生成新的承载负载(payload-bearing)的CompletableFuture.
+
+thenCombineAsync()是一个有趣的方法，他会等待两个CompletableFuture完成，再将两者转递给BiFunction,然后BiFunction将结果合并(join)到最终的CompletableFuture的载荷中。
+
+#### 模拟使用场景
+
+为了示范如果通过CompletableFuture来将一系列的操作捆绑到一起，我们模拟制作蛋糕的过程。第一步是准备配料，并将它们混入面粉中。
+
+```java
+public class Batter {
+    static class Eggs{} //蛋
+    static class Milk{} //牛奶
+    static class Sugar{} //糖
+    static class Flour{} //面粉
+    static <T> T prepare(T ingredient){
+        new TimeSleep(0.1);
+        return ingredient;
+    }
+    
+    static <T>CompletableFuture<T> prep(T ingredient){
+        return CompletableFuture.completedFuture(ingredient)
+                .thenApplyAsync(Batter::prepare);
+}
+
+    public static CompletableFuture<Batter> mix(){
+        CompletableFuture<Eggs> eggs = prep(new Eggs());
+        CompletableFuture<Milk> milk = prep(new Milk());
+        CompletableFuture<Sugar> sugar = prep(new Sugar());
+        CompletableFuture<Flour> flour = prep(new Flour());
+        CompletableFuture.allOf(eggs, milk, sugar, flour)
+                .join();
+        new TimeSleep(0.1); //混合时间
+        return CompletableFuture.completedFuture(new Batter());
+    }
+}
+```
+
+allof()会等待所有配料准备完毕，然后花一些时间将它们混合并放入面糊中。
+
+下一步将一份面糊分摊到4个平底锅中，然后进行烘烤，成品会以CompletableFuture类型的Stream形式返回；
+
+```java
+public class Baked {
+    static class Pan{}
+    
+    static Pan pan(Batter b){
+        new TimeSleep(0.1);
+        return new Pan();
+    }
+    static Baked heat(Pan p){
+        new TimeSleep(0.1);
+        return new Baked();
+    }
+    
+    static CompletableFuture<Baked> bake(CompletableFuture<Batter> cfb){
+        return cfb.thenApplyAsync(Baked::pan)
+                .thenApplyAsync(Baked::heat);
+    }
+    
+    public static Stream<CompletableFuture<Baked>> batch(){
+        CompletableFuture<Batter> batter = Batter.mix();
+        return Stream.of(bake(batter), bake(batter), bake(batter), bake(batter));
+    }
+}
+```
+
+最后我们创建一份Frosting(糖霜)，将其洒在蛋糕上。
+
+```java
+final class Frosting{
+    private Frosting(){}
+    static CompletableFuture<Frosting> make(){
+        new TimeSleep(0.1);
+        return CompletableFuture.completedFuture(new Frosting());
+    }
+}
+public class FrostedCake {
+    public FrostedCake(Baked baked, Frosting frosting){
+        new TimeSleep(0.1);
+    }
+
+    public static void main(String[] args) {
+        Baked.batch().forEach(backed -> backed.thenCombineAsync(Frosting.make(), FrostedCake::new)
+                .thenAcceptAsync(System.out::println)
+                .join());
+    }
+
+    @Override
+    public String toString(){
+        return "FrostedCake";
+    }
+}
+```
+
+结果：
+
+```txt
+FrostedCake
+FrostedCake
+FrostedCake
+FrostedCake
+```
+
+一旦适应了CompletableFuture背后的设计理念，他们就会变得相当好用。
+
+#### 异常
+
+和CompletableFuture对处理链的对象加以包装的方式一样，它还可以缓存异常。
+
+在处理过程中调用者并不会对此有所感知，这种效果只会在尝试提取结果时体现出来
+
+```java
+public class Breakable {
+    String id;
+    private  int failcount;
+    
+    public Breakable(String id, int failcount){
+        this.id = id;
+        this.failcount = failcount;
+    }
+    
+    @Override
+    public String toString(){
+        return "Breakable_"+id+" ["+failcount+"]";
+    }
+    
+    public static Breakable work(Breakable b){
+        if(--b.failcount == 0){
+            System.out.println("Throwing Exception for " + b.id );
+            throw new RuntimeException("Breakable_"+b.id+" failed");
+        }
+        System.out.println(b);
+        return b;
+    }
+}
+```
+
+通过正整型的failcount(失败数)，每次向work()方法传递对象，failcount都会递减，当它等于0的时候，work()会抛出异常，如果直接传入值为0的failcount，则永远不会抛出异常。
+
+```java
+public class CompletableExceptions {
+    static CompletableFuture<Breakable> test(String id, int failcount){
+        return CompletableFuture.completedFuture(new Breakable(id, failcount))
+                .thenApplyAsync(Breakable::work)
+                .thenApplyAsync(Breakable::work)
+                .thenApplyAsync(Breakable::work)
+                .thenApplyAsync(Breakable::work);
+    }
+
+    public static void main(String[] args) {
+        test("A" ,1);
+        test("B", 2);
+        test("C", 3);
+        test("D", 4);
+        test("E", 5);
+        //异常不会直接显露出来
+        try {
+            test("F", 2).join();
+        }catch (Exception e){
+            System.out.println(e.getMessage());
+        }
+        //直到我们尝试获取结果时，异常就会被打印出来
+        System.out.println(test("G", 2).isCompletedExceptionally());
+        System.out.println(test("H", 2).isDone());
+        //强制产生异常
+        CompletableFuture<Object> cfi = new CompletableFuture<>();
+        System.out.println("done? "+cfi.isDone());
+        cfi.completeExceptionally(new RuntimeException("forced"));
+        try {
+            cfi.get();
+        }catch (InterruptedException | ExecutionException e){
+            System.out.println(e.getMessage());
+        }
+    }
+}
+```
+
+结果：
+
+```txt
+Throwing Exception for A
+Breakable_B [1]
+Throwing Exception for B
+Breakable_F [1]
+Breakable_C [2]
+Breakable_D [3]
+Breakable_E [4]
+Throwing Exception for F
+Breakable_C [1]
+Breakable_D [2]
+Breakable_E [3]
+Throwing Exception for C
+Breakable_D [1]
+Breakable_E [2]
+Throwing Exception for D
+Breakable_E [1]
+java.lang.RuntimeException: Breakable_F failed
+false
+Breakable_G [1]
+Breakable_H [1]
+false
+Throwing Exception for G
+Throwing Exception for H
+done? false
+java.lang.RuntimeException: forced
+```
+
+从A到E的测试执行到抛出异常的节点时，什么都没有发生，只是在测试F中调用了get()后，才会看到抛出的异常，从测试G可以看出，我们可以先检查处理过程中是否有异常抛出，而不必真的抛出该异常，然而测试H告诉我们该异常仍符合”完成“的条件，不论其是否真的成功。
+
+代码的最后一部分演示了如何向CompletableFuture插入异常，不论是否出现任何失败。
