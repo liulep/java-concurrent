@@ -20,7 +20,7 @@ public class CompletableExceptions {
         test("E", 5);
         //异常不会直接显露出来
         try {
-            test("F", 2).join();
+            test("F", 2).get(); //获取join()
         }catch (Exception e){
             System.out.println(e.getMessage());
         }

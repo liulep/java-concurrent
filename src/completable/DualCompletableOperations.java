@@ -11,7 +11,7 @@ public class DualCompletableOperations {
     }
 
     static void join(){
-        cfa.join();
+        cfa.join(); //除非显示调用join(),否则程序将会在第一时间退出，而不会等待任务结束
         cfb.join();
         System.out.println("...............................");
     }
