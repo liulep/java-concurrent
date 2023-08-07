@@ -538,3 +538,182 @@ public class LockSupportTest {
 }
 ```
 
+### Unsafe
+
+> 实现CAS（Compare And Swap 比较且交换）操作的底层核心类，提供硬件级别的原子性操作，在Unsafe类中，提供了大量的native方法，通过调用JTI的方式调用JVM底层C和C++实现的函数。
+
+```java
+package cas;
+
+import sun.misc.Unsafe;
+
+import java.lang.reflect.Field;
+
+/**
+ * Unsafe案例
+ */
+public class UnsafeTest {
+    private static final Unsafe unsafe = getUnsafe();
+    private static long staticNameOffset = 0;
+    private static long memberVariableOffset = 0;
+    private static String staticName = "liulep";
+    private static String memberVariable = "liulep";
+
+    static {
+        try {
+            staticNameOffset = unsafe.staticFieldOffset(UnsafeTest.class.getDeclaredField("staticName"));
+            memberVariableOffset = unsafe.staticFieldOffset(UnsafeTest.class.getDeclaredField("memberVariable"));
+        }catch (NoSuchFieldException e){
+            e.printStackTrace();
+        }
+    }
+
+    private static Unsafe getUnsafe(){
+       Unsafe unsafe = null;
+       try {
+           Field theUnsafe = Unsafe.class.getDeclaredField("theUnsafe");
+           theUnsafe.setAccessible(true);
+           unsafe = (Unsafe) theUnsafe.get(null);
+       }catch (Exception e){
+           e.printStackTrace();
+       }
+       return unsafe;
+    }
+
+    public static void main(String[] args) {
+        UnsafeTest unsafeTest = new UnsafeTest();
+        System.out.println("修改前的数值如下：");
+        System.out.println("staticName = "+staticName+",memberVariable = "+unsafeTest.memberVariable);
+
+        unsafe.putObject(UnsafeTest.class, staticNameOffset, "liulep_static");
+        unsafe.compareAndSwapObject(unsafeTest, memberVariableOffset, "liulep", "liulep_member");
+        System.out.println("修改后的数值如下");
+        System.out.println("staticName = "+staticName+",memberVariable = "+unsafeTest.memberVariable);
+    }
+}
+```
+
+### 死锁
+
+```java
+/**
+ * 线程不安全的转账操作
+ */
+public class UnsafeTransferAccount {
+
+    private long balance = 500;
+
+    /**
+     *
+     * @param targetAccount 别人的账户
+     * @param transferMoney 所需转账的金额
+     */
+    public void transferMoney(UnsafeTransferAccount targetAccount, long transferMoney){
+        synchronized (this){ //此处的锁只能锁住当前this对象，无法所锁住别人账户的对象锁，所以还是存在线程安全
+            if(this.balance >= transferMoney){
+                this.balance -= transferMoney;
+                targetAccount.balance += transferMoney;
+            }
+        }
+    }
+}
+```
+
+```java
+/**
+ * 安全的账户转账
+ */
+public class SafeTransferAccount {
+
+    private long balance = 500;
+
+    /**
+     *
+     * @param targetAccount 别人的账户
+     * @param transferMoney 所需转账的金额
+     */
+    public void transferMoney(SafeTransferAccount targetAccount, long transferMoney){
+        synchronized (SafeTransferAccount.class){ //通过锁住class对象来达到串行执行
+            if(this.balance >= transferMoney){
+                this.balance -= transferMoney;
+                targetAccount.balance += transferMoney;
+            }
+        }
+    }
+    /**
+     * 缺点：会导致排队现象，转账的时候必须等待前一个人转账成功，对于银行转账操作是不可取的
+     * 之前都是对当前转账人账户进行加锁或者是对全局的账户对象进行加锁导致了线程安全问题和排队现象问题，并没有对收款人账户进行加锁
+     * 那如果我们只对这两个账户进行加锁，是不是并行执行呢
+     * 往下看
+     */
+}
+
+```
+
+```java
+public class DeadLockTransferAccount {
+
+    private long balance = 500;
+
+    /**
+     *
+     * @param targetAccount 别人的账户
+     * @param transferMoney 所需转账的金额
+     */
+    public void transferMoney(DeadLockTransferAccount targetAccount, long transferMoney){
+        synchronized (this){ 
+            synchronized (targetAccount){
+                if(this.balance >= transferMoney){
+                    this.balance -= transferMoney;
+                    targetAccount.balance += transferMoney;
+                }
+            }
+        }
+    }
+
+    /**
+     * 结果就是会导致死锁的产生
+     
+     */
+}
+
+```
+
+```java
+/**
+ * 破坏不可剥夺条件来预防死锁
+ */
+public class LockTransferAccount {
+
+    //账户余额
+    private long balance;
+    //转出账户的锁
+    private Lock thisLock = new ReentrantLock();
+    //转入账户的锁
+    private Lock targetAccountLock = new ReentrantLock();
+
+    /**
+     * @param targetAccount 别人的账户
+     * @param transferMoney 所需转账的金额
+     */
+    public void transferMoney(LockTransferAccount targetAccount, long transferMoney) {
+        try {
+            if (thisLock.tryLock()) {
+                try {
+                    if (targetAccountLock.tryLock()) {
+                        if (this.balance >= transferMoney) {
+                            this.balance -= transferMoney;
+                            targetAccount.balance -= transferMoney;
+                        }
+                    }
+                } finally {
+                    targetAccountLock.unlock();
+                }
+            }
+        }finally {
+            thisLock.unlock();
+        }
+    }
+}
+```
+
